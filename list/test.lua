@@ -41,8 +41,29 @@ setBootstrapStatus("Starting. Waiting for game...")
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
+local startupStage = "initialization"
+
+-- Delta cloneref errors on non-Instance values used by some UI dependencies.
+-- Keep normal Instance behavior; pass other values through unchanged.
+local executorEnvironment = type(getgenv) == "function" and getgenv() or _G
+local originalCloneRef = executorEnvironment.cloneref
+local originalCloneReference = executorEnvironment.clonereference
+local function safeCloneRef(value)
+	if typeof(value) ~= "Instance" then
+		return value
+	end
+	local clone = type(originalCloneRef) == "function" and originalCloneRef or originalCloneReference
+	if type(clone) ~= "function" then
+		return value
+	end
+	local ok, result = pcall(clone, value)
+	return ok and result or value
+end
+executorEnvironment.cloneref = safeCloneRef
+executorEnvironment.clonereference = safeCloneRef
 
 local bootstrapOk, bootstrapError = xpcall(function()
+	startupStage = "game modules"
 -- Auto roll loop for Roll A Gnome.
 -- Roll: Network:InvokeServer("Roll"). Result appears as a model in Plot.RNG.Preview.
 -- Auto-buy target = roll -> find target model in preview -> activate ProximityPrompt "Buy".
@@ -63,12 +84,13 @@ assert(ReplicationModule, "Replication module not found")
 local Replication = require(ReplicationModule)
 local Mutations = assert(Library.get("Mutations"), "Mutations module unavailable")
 
-setBootstrapStatus("Loading UI...")
+	startupStage = "WindUI download"
+	setBootstrapStatus("Loading UI...")
 local windUiSource
 do
 	local urls = {
-		"https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/main.lua",
-		"https://cdn.jsdelivr.net/gh/Footagesus/WindUI@main/main.lua",
+		"https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/dist/main.lua",
+		"https://cdn.jsdelivr.net/gh/Footagesus/WindUI@main/dist/main.lua",
 	}
 	local lastError
 	for _, url in ipairs(urls) do
@@ -90,11 +112,13 @@ do
 	end
 	assert(windUiSource, "WindUI download failed: " .. tostring(lastError))
 end
-local compile = assert(loadstring, "Delta loadstring unavailable; update Delta to latest version")
-local windUiChunk, compileError = compile(windUiSource)
-assert(windUiChunk, "WindUI compile failed: " .. tostring(compileError))
-local WindUI = windUiChunk()
-assert(type(WindUI) == "table", "WindUI returned invalid result")
+	startupStage = "WindUI compile"
+	local compile = assert(loadstring, "Delta loadstring unavailable; update Delta to latest version")
+	local windUiChunk, compileError = compile(windUiSource)
+	assert(windUiChunk, "WindUI compile failed: " .. tostring(compileError))
+	startupStage = "WindUI initialization"
+	local WindUI = windUiChunk()
+	assert(type(WindUI) == "table", "WindUI returned invalid result")
 local running = false
 local skipVisuals = true
 local targetNames = {} -- labels shown in UI
@@ -978,7 +1002,8 @@ local function start()
 	end)
 end
 
-setBootstrapStatus("Creating UI...")
+	startupStage = "window creation"
+	setBootstrapStatus("Creating UI...")
 local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(760, 520)
 local mobileWindowSize = UDim2.fromOffset(math.max(viewport.X - 24, 360), math.max(viewport.Y - 24, 300))
@@ -1389,10 +1414,21 @@ notify("Roll A Gnome ready", isMobile and "Tap the floating button to open the U
 if bootstrapGui then
 	bootstrapGui:Destroy()
 end
+	startupStage = "ready"
 end, function(err)
-	return tostring(err)
+	local message = startupStage .. ": " .. tostring(err)
+	if debug and type(debug.traceback) == "function" then
+		local ok, trace = pcall(debug.traceback, message, 2)
+		if ok then
+			return trace
+		end
+	end
+	return message
 end)
 
 if not bootstrapOk then
 	setBootstrapStatus("Startup failed: " .. tostring(bootstrapError), true)
 end
+
+executorEnvironment.cloneref = originalCloneRef
+executorEnvironment.clonereference = originalCloneReference
