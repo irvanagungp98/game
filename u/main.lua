@@ -551,7 +551,7 @@ local NAV_ALL = {
 				toggle("perf_no3d", "Stop Rendering", "Stops drawing the game to save power while AFK. The screen turns white until you turn it off.", {bind = "None"}),
 			}},
 			{title = "Idle & Reconnect", rows = {
-				toggle("anti_afk", "Anti-AFK", "Stop the idle kick after 20 minutes."),
+				toggle("anti_afk", "Anti-AFK", "Keep the client awake: every Idled event is answered with a VirtualUser controller capture and a key press, plus a poke every 60 s, so a long unattended session is never kicked."),
 				toggle("auto_rejoin", "Auto Rejoin", "Rejoin automatically after a disconnect."),
 				slider("auto_rejoin_delay", "Rejoin Delay", "Seconds to wait before rejoining.", 1, 30, 5, {suf = "s"}),
 				toggle("ses_joins", "Join Alerts", "Notify when players join or leave."),
@@ -622,6 +622,7 @@ local NAV_ALL = {
 					color("pal_sub", "Muted Text", "Change any color to make your own theme.", "#909098FF"),
 				}},
 				{title = "Layout", rows = {
+					toggle("ui_fit", "Fit Screen", "Scale the menu down so it fits small displays such as phones.", {def = true, nobind = true}),
 					slider("ui_scale", "Size", "Size of the whole menu. Applies when you let go.", 75, 130, 100, {suf = "%", commit = true}),
 					drop("ui_density", "Spacing", "Space between rows.", {"Comfortable", "Compact"}, "Comfortable"),
 					slider("ui_radius", "Roundness", "How round the corners are.", 4, 20, 14, {commit = true}),
@@ -653,7 +654,7 @@ local NAV_ALL = {
 		{id = "set_overlays", name = "Overlays", icon = "layers", page = {
 			{
 				{title = "Watermark", rows = {
-					toggle("ov_wm", "Enabled", "Info bar at the top of the screen.", {def = true}),
+					toggle("ov_wm", "Enabled", "Info bar at the top of the screen.", {def = false}),
 					drop("wm_style", "Style", "Look of the bar.", {"Glass", "Solid", "Minimal"}, "Glass"),
 					toggle("wm_fps", "Frame Rate", "Show frames per second.", {def = true, nobind = true}),
 					toggle("wm_ping", "Ping", "Show ping in milliseconds.", {def = true, nobind = true}),
@@ -664,7 +665,7 @@ local NAV_ALL = {
 					toggle("wm_user", "Account", "Show your name and avatar.", {def = true, nobind = true}),
 				}},
 				{title = "Keybind List", rows = {
-					toggle("ov_kb", "Enabled", "Floating panel with your bound keys and their state.", {def = true}),
+					toggle("ov_kb", "Enabled", "Floating panel with your bound keys and their state.", {def = false}),
 					toggle("kb_inactive", "Show Inactive", "Also list keybinds that are off.", {def = true, nobind = true}),
 					toggle("kb_hideempty", "Hide When Empty", "Hide the panel when it has nothing to show.", {nobind = true}),
 				}},
@@ -678,7 +679,7 @@ local NAV_ALL = {
 					toggle("ks_space", "Space Bar", "Show the space bar.", {def = true, nobind = true}),
 				}},
 				{title = "Notifications", rows = {
-					toggle("nt_on", "Enabled", "Show notifications.", {def = true, nobind = true}),
+					toggle("nt_on", "Enabled", "Show notifications.", {def = false, nobind = true}),
 					drop("nt_pos", "Position", "Screen corner for notifications.", {"Top Right", "Top Center", "Top Left", "Bottom Right", "Bottom Center", "Bottom Left"}, "Top Right"),
 					slider("nt_dur", "Duration", "Seconds each notification stays.", 1, 10, 4, {step = 0.5, suf = "s"}),
 					drop("nt_style", "Style", "Full cards or slim pills.", {"Card", "Compact"}, "Card"),
@@ -2306,7 +2307,32 @@ function D.closePops(level)
 	if #pops == 0 and D.flushRebuild then D.flushRebuild() end
 end
 
-function D.uiScale() return (S.ui_scale or 100) / 100 end
+-- (fit:start) Responsive fit: on small displays (phones) the menu is scaled
+-- down and its height is capped so it never covers the whole screen - the
+-- pages scroll instead. 24 px stays free around the window, touch screens
+-- keep 10% extra air, and the 0.42 floor keeps text readable.
+function D.fitBox()
+	local vp = D.viewport()
+	local w, h = vp.X - 24, vp.Y - 24
+	if UIS.TouchEnabled and not UIS.KeyboardEnabled then
+		w, h = w * 0.9, h * 0.9
+	end
+	return math.max(w, 200), math.max(h, 140)
+end
+function D.uiScale()
+	local user = (S.ui_scale or 100) / 100
+	local W_ = D.WIN
+	if S.ui_fit == false or not W_ or not W_.w or W_.w <= 0 then return user end
+	local cap = select(1, D.fitBox()) / W_.w
+	return math.min(user, math.max(cap, 0.42))
+end
+function D.fitHeight()
+	local base = D.WIN and D.WIN.h or 640
+	if S.ui_fit == false then return base end
+	local cap = select(2, D.fitBox()) / math.max(D.uiScale(), 0.01)
+	return math.max(240, math.floor(math.min(base, cap) + 0.5))
+end
+-- (fit:end)
 
 local function place(f, anchor, how, sc)
 	local vp = D.viewport()
@@ -4848,6 +4874,9 @@ local function readSize()
 	WIN_W = math.clamp(math.floor(tonumber(mw or c.Width) or 880), 720, 1600)
 	WIN_H = math.clamp(math.floor(tonumber(mh or c.Height) or 640), 460, 1100)
 	SIDE_W = math.clamp(math.floor(tonumber(c.SidebarWidth) or 188), 150, 280)
+	if UIS.TouchEnabled and not UIS.KeyboardEnabled then
+		WIN_W, WIN_H = math.min(WIN_W, 980), math.min(WIN_H, 900)
+	end
 	D.WIN.w, D.WIN.h = WIN_W, WIN_H
 end
 
@@ -5177,7 +5206,7 @@ end
 function D.centerWin()
 	local vp = D.viewport()
 	local s = D.uiScale()
-	return math.floor(vp.X / 2 - WIN_W * s / 2), math.floor(vp.Y / 2 - WIN_H * s / 2)
+	return math.floor(vp.X / 2 - WIN_W * s / 2), math.floor(vp.Y / 2 - math.min(WIN_H, D.fitHeight()) * s / 2)
 end
 
 local function beginDrag()
@@ -5238,7 +5267,7 @@ function D.buildWindow()
 	if W.pos then x, y = W.target.X, W.target.Y end
 	local cx, cy = D.centerWin()
 	x, y = D.clampWin(x or cx, y or cy)
-	local win = new("CanvasGroup", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(WIN_W, W.minimized and 66 or WIN_H), BackgroundColor3 = T.win, GroupTransparency = D.menuOpen and 0 or 1, Visible = D.menuOpen == true, Parent = D.L.win})
+	local win = new("CanvasGroup", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(WIN_W, W.minimized and 66 or math.min(WIN_H, D.fitHeight())), BackgroundColor3 = T.win, GroupTransparency = D.menuOpen and 0 or 1, Visible = D.menuOpen == true, Parent = D.L.win})
 	W.win = win
 	W.target = Vector2.new(x, y)
 	W.pos = Vector2.new(x, y)
@@ -5315,7 +5344,6 @@ function D.buildWindow()
 	end
 
 	local profSep = frame({Position = UDim2.new(0, 14, 1, -82), Size = UDim2.new(0, SIDE_W - 28, 0, 1), BackgroundColor3 = T.ink, BackgroundTransparency = 0.93, ZIndex = 2, Visible = not W.minimized, Parent = win})
-	D.makeCredit(win)
 	local prof = button({Position = UDim2.new(0, 8, 1, -74), Size = UDim2.fromOffset(SIDE_W - 16, 62), BackgroundColor3 = T.ink, BackgroundTransparency = 1, ZIndex = 2, Visible = not W.minimized, Parent = win})
 	W.bottom = {profSep, prof}
 	corner(prof, M.rCard)
@@ -5413,10 +5441,11 @@ function D.buildWindow()
 			end, grip)
 		end)
 	end
-	local minB = headerButton(tools, W.minimized and "maximize-2" or "minus", W.minimized and "Restore" or "Minimize", 4)
+	local minB = headerButton(tools, "chevron-down", "Close menu", 4)
 	minB.MouseButton1Click:Connect(function()
 		D.play("click")
-		D.setMinimized(not W.minimized)
+		-- minimize button = menu open/close toggle (drops down, moves up)
+		D.setMenu(not D.menuOpen)
 	end)
 	W.minB = minB
 	local closeB = headerButton(tools, "x", "Close menu", 5)
@@ -5443,52 +5472,50 @@ function D.setMinimized(v)
 	if not win then return end
 	D.closePops(1)
 	D.hideTip()
-	tween(win, 0.32, {Size = UDim2.fromOffset(WIN_W, v and MIN_H or WIN_H)}, Enum.EasingStyle.Quint)
+	tween(win, 0.32, {Size = UDim2.fromOffset(WIN_W, v and MIN_H or math.min(WIN_H, D.fitHeight()))}, Enum.EasingStyle.Quint)
 	if W.grip then W.grip.Visible = not v end
 	for _, o in ipairs(W.bottom or {}) do
 		if o.Parent then o.Visible = not v end
-	end
-	if W.credit then W.credit.Visible = not v end
-	if W.minB then
-		for _, c in ipairs(W.minB:GetChildren()) do
-			if c:IsA("ImageLabel") then D.setIcon(c, v and "maximize-2" or "minus") end
-		end
 	end
 	D.applyBackdrop()
 	D.fire("__minimized")
 end
 
-local CREDIT_TEXT = "made with arvn lib"
-function D.makeCredit(win)
-	local credit = button({Name = "Credit", Position = UDim2.new(0, 14, 1, -104), Size = UDim2.new(0, SIDE_W - 28, 0, 16), Text = CREDIT_TEXT, TextSize = 11, FontFace = D.F(D.W.med), TextColor3 = T.dim, TextTransparency = 0.25, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 40, Visible = not W.minimized, Parent = win})
-	D.tip(credit, "arvn lib by koteqjjjj. Click to copy the GitHub link.")
-	credit.MouseEnter:Connect(function() tween(credit, 0.15, {TextTransparency = 0, TextColor3 = T.sub}) end)
-	credit.MouseLeave:Connect(function() tween(credit, 0.2, {TextTransparency = 0.25, TextColor3 = T.dim}) end)
-	credit.MouseButton1Click:Connect(function()
-		D.play("click")
-		D.runAction("act_lib_link")
-	end)
-	W.credit = credit
-	return credit
-end
-
-local creditClock = 0
-local function creditOk(c, win)
-	return c and c.Parent == win and c.Visible and c.Text == CREDIT_TEXT and c.TextTransparency < 0.6 and c.TextSize >= 9
-		and c.AbsoluteSize.X >= 60 and c.AbsoluteSize.Y >= 10 and c.ZIndex >= 40
-end
-
-function D.stepWindow(dt)
-	creditClock += dt
-	if creditClock > 1 and W.win and W.win.Parent then
-		creditClock = 0
-		if not W.minimized and not creditOk(W.credit, W.win) then
-			pcall(function() if W.credit then W.credit:Destroy() end end)
-			D.makeCredit(W.win)
-		end
+-- (refit:start) Pull the window back into the display whenever the screen
+-- changed (phone rotation, desktop window resize). The per-frame guard in
+-- D.stepWindow calls this too, so a stale size never survives a frame.
+function D.refitWindow()
+	local win = W.win
+	if not win then return end
+	local fit = D.uiScale()
+	if W.scale and math.abs(W.scale.Scale - fit) > 0.004 then W.scale.Scale = fit end
+	local capH = D.fitHeight()
+	if not W.minimized and win.Size.Y.Offset ~= capH then
+		win.Size = UDim2.fromOffset(WIN_W, capH)
 	end
+	local vp = D.viewport()
+	local p = W.target or W.pos or Vector2.new(win.Position.X.Offset, win.Position.Y.Offset)
+	local vw = WIN_W * fit
+	local vh = (W.minimized and MIN_H or capH) * fit
+	W.target = Vector2.new(
+		math.clamp(p.X, math.min(8, vp.X - vw - 8), math.max(8, vp.X - vw - 8)),
+		math.clamp(p.Y, math.min(0, vp.Y - vh), math.max(0, vp.Y - vh)))
+	W.pos = W.target
+end
+
+D.on(D.gui:GetPropertyChangedSignal("AbsoluteSize"), function()
+	task.defer(function() D.refitWindow() end)
+end)
+-- (refit:end)
+function D.stepWindow(dt)
 	local win = W.win
 	if not win or not win.Visible then return end
+	-- (guard:start) Responsive guard: clamp down only, so the open / close /
+	-- minimize animations (max 6% scale, height below the cap) stay smooth.
+	if (W.scale and W.scale.Scale > D.uiScale() + 0.08) or (not W.minimized and win.Size.Y.Offset > D.fitHeight() + 1) then
+		D.refitWindow()
+	end
+	-- (guard:end)
 	local k = 1 - math.exp(-dt * 26)
 	if W.target then
 		W.pos = W.pos or W.target
@@ -5498,7 +5525,13 @@ function D.stepWindow(dt)
 	local base = D.uiScale()
 	local cur = W.scale and W.scale.Scale or base
 	local off = Vector2.new(WIN_W, WIN_H) * (base - cur) * 0.5
-	local rp = (W.pos or Vector2.zero) + off
+	if W.animGoal and W.animY ~= W.animGoal then
+		local ay = W.animY or W.animGoal
+		ay = ay + (W.animGoal - ay) * (1 - math.exp(-dt * 20))
+		if math.abs(W.animGoal - ay) < 0.5 then ay = W.animGoal end
+		W.animY = ay
+	end
+	local rp = (W.pos or Vector2.zero) + off + Vector2.new(0, W.animY or 0)
 	win.Position = UDim2.fromOffset(math.floor(rp.X + 0.5), math.floor(rp.Y + 0.5))
 
 	local par = PARENT[W.current]
@@ -7152,14 +7185,38 @@ function D.apply3d()
 end
 D.onCleanup(function() pcall(function() RunService:Set3dRenderingEnabled(true) end) end)
 
-D.on(LP.Idled, function()
-	if not S.anti_afk then return end
+-- (anti-afk:start) Idle guard: Roblox counts a client as idle until it sends
+-- input, so every Idled event is answered with a VirtualUser controller
+-- capture, a button press and a key press, plus a heartbeat poke every 60 s -
+-- a long unattended session is never kicked. The flag is read live, so a
+-- re-run with the toggle already saved on arms itself, and the heartbeat dies
+-- with D.alive when the menu is ejected.
+function D.antiafkPoke()
 	pcall(function()
 		local vu = cloneref(game:GetService("VirtualUser"))
+		local cam = workspace.CurrentCamera
 		vu:CaptureController()
-		vu:ClickButton2(Vector2.new())
+		vu:ClickButton2(Vector2.new(), cam and cam.CFrame or CFrame.new())
 	end)
+	pcall(function()
+		local vim = cloneref(game:GetService("VirtualInputManager"))
+		vim:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+		vim:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+	end)
+end
+D.on(LP.Idled, function()
+	if S.anti_afk then D.antiafkPoke() end
 end)
+D.watch("anti_afk", function(v)
+	if v then D.antiafkPoke() end
+end)
+task.spawn(function()
+	while D.alive do
+		task.wait(60)
+		if D.alive and S.anti_afk then D.antiafkPoke() end
+	end
+end)
+-- (anti-afk:end)
 
 local rejoining = false
 D.on(GuiService.ErrorMessageChanged, function(msg)
@@ -8067,11 +8124,11 @@ function D.setMenu(v)
 			win.Visible = true
 			win.GroupTransparency = 1
 			W.scale.Scale = D.uiScale() * 0.94
-			local tp = W.target or Vector2.new(win.Position.X.Offset, win.Position.Y.Offset)
-			win.Position = UDim2.fromOffset(tp.X, tp.Y + 16)
+			W.animY, W.animGoal = -26, 0
 			tween(win, 0.3, {GroupTransparency = 0}, Enum.EasingStyle.Sine)
 			tween(W.scale, 0.45, {Scale = D.uiScale()}, Enum.EasingStyle.Back)
 		else
+			W.animGoal = -26
 			tween(win, 0.2, {GroupTransparency = 1}, Enum.EasingStyle.Sine)
 			tween(W.scale, 0.22, {Scale = D.uiScale() * 0.95}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 			task.delay(D.tweenTime(0.21), function()
@@ -8520,6 +8577,11 @@ function D.start()
 	D.watch("ui_scale", function()
 		D.closePops(1)
 		D.setWinScale(true)
+	end)
+	D.watch("ui_fit", function()
+		D.closePops(1)
+		D.setWinScale(true)
+		D.refitWindow()
 	end)
 	for _, k in ipairs({"ui_dim", "ui_dim_amt", "ui_blur", "ui_blur_size"}) do D.watch(k, D.applyBackdrop) end
 	for _, k in ipairs({"fx_style", "fx_size"}) do D.watch(k, D.resetParticles) end
